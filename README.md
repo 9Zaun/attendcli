@@ -1,5 +1,151 @@
 # AttendCLI
 
+## Quick setup (follow verbatim)
+
+Use this section to get AttendCLI fully working with minimal friction. After this, run `attend --help` to explore all commands.
+
+### 1. Clone and create a virtualenv
+
+**macOS / Linux**
+
+```bash
+# clone and enter the project
+git clone https://github.com/9Zaun/attendcli.git
+cd attendcli
+
+# create and activate a virtualenv
+python3 -m venv .venv
+source .venv/bin/activate
+
+# install AttendCLI in editable mode (one-time per venv)
+pip install -e .
+```
+
+**Windows (PowerShell)**
+
+```powershell
+# clone and enter the project
+git clone https://github.com/9Zaun/attendcli.git
+cd attendcli
+
+# create and activate a virtualenv
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+
+# install AttendCLI in editable mode (one-time per venv)
+pip install -e .
+```
+
+After this, the `attend` command is available **inside this virtualenv**.
+
+---
+
+### 2. Daily usage (every new terminal session)
+
+Each time you open a new terminal and want to use AttendCLI:
+
+**macOS / Linux**
+
+```bash
+cd /path/to/attendcli
+source .venv/bin/activate
+
+# now you can run attend from any folder in this terminal
+attend --help
+```
+
+**Windows (PowerShell)**
+
+```powershell
+cd C:\path\to\attendcli
+.\.venv\Scripts\Activate.ps1
+
+# now you can run attend from any folder in this terminal
+attend --help
+```
+
+You do **not** need to run `pip install -e .` again unless you delete/recreate the `.venv` folder.
+
+---
+
+### 3. First-time semester setup and daily flow
+
+Once the virtualenv is active (you see `(.venv)` or similar in your prompt):
+
+```bash
+# one-time at the start of a new semester
+attend init
+```
+
+On teaching days:
+
+```bash
+attend day    # morning dashboard (read-only)
+attend log    # end-of-day attendance logging
+```
+
+You can run these from **any directory**; all data is stored locally in `~/.attendcli/` (not in the repo).
+
+---
+
+### 4. Optional automation (recommended on your own machine)
+
+These are optional quality-of-life tweaks for frequent users.
+
+#### 4.1 Auto-backup data on each `attend log` (macOS / Linux)
+
+This keeps a dated backup of `~/.attendcli/` every time you log attendance.
+
+**Check your shell:**
+
+```bash
+echo $SHELL
+```
+
+If it contains `zsh`, use `.zshrc`. If it contains `bash`, use `.bashrc`.
+
+**Add this to your shell config (pick one of the two, matching your shell):**
+
+```bash
+# for Zsh users
+echo '\n# AttendCLI auto-backup only for "attend log"\nattend() {\n  if [ "$1" = "log" ]; then\n    cp -r ~/.attendcli ~/.attendcli_backup_$(date +%Y%m%d) 2>/dev/null\n  fi\n  command attend "$@"\n}\n' >> ~/.zshrc && source ~/.zshrc
+```
+
+```bash
+# for Bash users
+echo '\n# AttendCLI auto-backup only for "attend log"\nattend() {\n  if [ "$1" = "log" ]; then\n    cp -r ~/.attendcli ~/.attendcli_backup_$(date +%Y%m%d) 2>/dev/null\n  fi\n  command attend "$@"\n}\n' >> ~/.bashrc && source ~/.bashrc
+```
+
+Now, every `attend log` will silently create a backup folder like
+`~/.attendcli_backup_20260620` before writing new data.
+
+#### 4.2 Auto-activate the venv when you `cd` into the repo (macOS / Linux, Zsh)
+
+This makes the `.venv` turn on automatically whenever you enter the `attendcli` folder.
+
+```bash
+echo '\n# Auto-activate attendcli venv\nattendcli_autoactivate() {\n  if [ -d ".venv" ] && [ -z "$ATTENDCLI_VENV_ACTIVE" ]; then\n    export ATTENDCLI_VENV_ACTIVE=1\n    source .venv/bin/activate\n  fi\n}\nchpwd_functions+=attendcli_autoactivate\n' >> ~/.zshrc && source ~/.zshrc
+```
+
+After this:
+
+```bash
+cd /path/to/attendcli   # venv auto-activates
+attend day              # works immediately
+```
+
+(Windows users can create similar PowerShell profiles/aliases, but that setup is left to the reader.)
+
+---
+
+From here, run:
+
+```bash
+attend --help
+```
+
+to see the full list of commands, then use the rest of this README for detailed behavior (attendance, bunks, crunch, tasks, configuration, etc.).
+
 Terminal-first, locally-run academic survival system. Tracks attendance and the
 bunk economy (derived from the 75% rule), tasks/deadlines/events with a
 priority×urgency scheduler, week boxes, marks, and a productivity heatmap.
