@@ -1,0 +1,6 @@
+.venv/
+__pycache__/
+*.pyc
+attendcli_export_*.zip
+*.egg-info/
+.DS_Store
