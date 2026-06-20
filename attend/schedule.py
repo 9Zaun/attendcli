@@ -8,8 +8,8 @@ State shape (``schedule.json``):
     "stale": bool
   }
 
-The stale flag is set whenever a task's priority/due/status changes so the
-tasks view can show a ``[!]`` reminder until the user re-runs ``attend crunch``.
+The stale flag is set whenever a task's priority/due/status/fixed flag changes so the
+tasks view can show a ``[!]`` reminder until the user re-runs ``attend schedule --crunch``.
 """
 
 from __future__ import annotations
@@ -106,18 +106,20 @@ def generate() -> dict[str, Any]:
 
     Strategy (deadline-aware balanced spreading with a soft capacity):
 
-    1. Each task's reference date is its linked deadline/event date if linked,
+    1. Fixed tasks are pinned to their ``fixed_date`` first (always, even above
+       capacity; never moved by the greedy step).
+    2. Each non-fixed task's reference date is its linked deadline/event date if
        else its own ``due``. Eligible days are ``today <= day < reference`` —
        the exam/presentation day is a no-work day for tasks tied to it.
-    2. Tasks are placed earliest-deadline-first (nearer reference dates reserve
+    3. Non-fixed tasks are placed earliest-deadline-first (nearer reference dates reserve
        their smaller windows before farther ones), with higher score winning
        within the same date and undated tasks placed last.
-    3. Each task goes on the least-loaded eligible day that stays within
+    4. Each non-fixed task goes on the least-loaded eligible day that stays within
        capacity; if all eligible days are full, it overflows onto the
        least-loaded eligible day (capacity is a soft target — never violated
        unless finishing on time is otherwise impossible, and then the excess is
        spread, never crammed onto a single day).
-    4. Overload is detected two ways and recorded for transparency: per-day
+    5. Overload is detected two ways and recorded for transparency: per-day
        (any planned day above capacity) and per-deadline (when the work due
        before a reference date cannot fit in capacity x available days).
 
@@ -135,6 +137,8 @@ def generate() -> dict[str, Any]:
 
     # Only actual work items are scheduled (deadlines/events are dates, not work).
     pending_tasks = tasks_store.pending(kind="task")
+    fixed_tasks = [t for t in pending_tasks if tasks_store.is_fixed(t)]
+    free_tasks = [t for t in pending_tasks if not tasks_store.is_fixed(t)]
 
     # Build the candidate working-day list.
     day_list: list = []
@@ -144,17 +148,29 @@ def generate() -> dict[str, Any]:
             continue
         day_list.append(d)
 
-    # Earliest-deadline-first; score (priority x urgency) breaks ties so the
-    # most important work within a deadline is reserved first.
-    ordered = sorted(
-        pending_tasks,
-        key=lambda t: (_ref_iso(t, id_map) or _FAR_REF,
-                       -scoring.score(t, id_map, base)),
-    )
-
     used: dict[str, int] = {to_iso(d): 0 for d in day_list}
     days: dict[str, list[str]] = {to_iso(d): [] for d in day_list}
     unscheduled: list[str] = []
+
+    # Step 1: pin fixed tasks to their fixed date (always, even above capacity).
+    for task in fixed_tasks:
+        pin = tasks_store.pin_date(task, id_map)
+        if not pin:
+            unscheduled.append(task["id"])
+            continue
+        key = pin
+        if key not in days:
+            days[key] = []
+            used[key] = 0
+        days[key].append(task["id"])
+        used[key] += _capacity_cost(task, mode)
+
+    # Step 2: earliest-deadline-first greedy for all non-fixed tasks.
+    ordered = sorted(
+        free_tasks,
+        key=lambda t: (_ref_iso(t, id_map) or _FAR_REF,
+                       -scoring.score(t, id_map, base)),
+    )
 
     for task in ordered:
         cost = _capacity_cost(task, mode)
@@ -275,4 +291,7 @@ def move(task_id: str, date_iso: str) -> bool:
     cur.setdefault("days", {}).setdefault(date_iso, []).append(canon)
     data["current"] = cur
     save(data)
+    # Keep a fixed task's pin in sync with manual moves.
+    if tasks_store.is_fixed(task):
+        tasks_store.update(canon, fixed_date=date_iso)
     return True

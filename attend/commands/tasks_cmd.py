@@ -1,4 +1,4 @@
-"""Task/deadline/event commands: add, tasks, done, cancel, show, crunch."""
+"""Task/deadline/event commands: add, tasks, done, cancel, show, schedule, fix."""
 
 from __future__ import annotations
 
@@ -10,6 +10,10 @@ from rich.table import Table
 from .. import config, prompts, schedule, scoring, tasks_store
 from ..console import console, error, info, success, warn
 from ..dates import parse_date_arg, parse_iso, to_iso, today, weekday_short
+
+
+def _deprecation_warn(message: str) -> None:
+    print(f"WARNING: {message}", file=sys.stderr)
 
 
 def _subject_label(code: str) -> str:
@@ -35,8 +39,14 @@ def dispatch(cmd: str, args) -> int:
         return cmd_cancel(args)
     if cmd == "show":
         return cmd_show(args)
+    if cmd == "schedule":
+        return cmd_schedule(args)
     if cmd == "crunch":
         return cmd_crunch(args)
+    if cmd == "fix":
+        return cmd_fix(args)
+    if cmd == "unfix":
+        return cmd_unfix(args)
     return 1
 
 
@@ -198,7 +208,7 @@ def cmd_tasks(args) -> int:
 
     title = "Tasks — by priority × urgency"
     if stale:
-        title += r"  \[!] schedule stale (run `attend crunch --replan`)"
+        title += r"  \[!] schedule stale (run `attend schedule --crunch`)"
     table = Table(title=title, header_style="bold")
     for col in ["", "ID", "Kind", "Subject", "Title", "Ref date", "P", "Score", "Tags", ""]:
         if col == "Ref date":
@@ -213,13 +223,14 @@ def cmd_tasks(args) -> int:
         sc = scoring.score(it, id_map)
         marker = r"[yellow]\[!][/yellow]" if (stale and it["kind"] == "task") else ""
         note_mark = "[blue]✎[/blue]" if (it.get("notes") or "").strip() else ""
+        fixed_mark = " [magenta](fixed)[/magenta]" if tasks_store.is_fixed(it) else ""
         tags = " ".join(f"#{t}" for t in it.get("tags", []))
         table.add_row(
             marker,
             it["id"],
             it["kind"],
             _subject_label(it.get("subject") or ""),
-            it["title"],
+            it["title"] + fixed_mark,
             ref,
             str(it["priority"]),
             f"{sc:.1f}",
@@ -306,6 +317,12 @@ def cmd_show(args) -> int:
         info(f"  Linked to:  {item['linked_to']}")
     ref = scoring.reference_date(item, id_map)
     info(f"  Ref date:   {ref or '—'}")
+    if item.get("kind") == "task":
+        if tasks_store.is_fixed(item):
+            pin = tasks_store.pin_date(item, id_map) or "—"
+            info(f"  Fixed:      yes (pinned to {pin})")
+        else:
+            info("  Fixed:      no")
     # Score is a planning metric; it's meaningless for closed items.
     if is_open:
         info(f"  Score:      {scoring.score(item, id_map):.2f}")
@@ -323,39 +340,83 @@ def cmd_show(args) -> int:
 
 
 # --------------------------------------------------------------------------- #
-# attend crunch (scheduler — Phase 6)
+# attend schedule (primary) / attend crunch (deprecated wrapper)
 # --------------------------------------------------------------------------- #
 
 
-def cmd_crunch(args) -> int:
-    if getattr(args, "crunch_command", None) == "move":
-        return _crunch_move(args)
+def _plan_day_for(task_id: str) -> str | None:
+    """Return the ISO date a task sits on in the current plan, if any."""
+    cur = schedule.load().get("current") or {}
+    for day_iso, ids in cur.get("days", {}).items():
+        if task_id in ids:
+            return day_iso
+    return None
+
+
+def _run_planner() -> None:
+    """Generate a fresh plan and open the board."""
+    plan = schedule.generate()
+    schedule.commit(plan)
+    success("Regenerated schedule plan.")
+    _open_board()
+
+
+def cmd_schedule(args) -> int:
+    if getattr(args, "schedule_command", None) == "move":
+        return _schedule_move(args)
 
     if getattr(args, "undo", False):
         if schedule.undo():
-            success("Reverted to previous crunch plan.")
+            success("Reverted to previous schedule plan.")
             _open_board()
         else:
             warn("No previous plan to undo to.")
         return 0
 
-    if getattr(args, "replan", False):
-        plan = schedule.generate()
-        schedule.commit(plan)
-        success("Regenerated crunch plan from scratch.")
-        _open_board()
+    if getattr(args, "crunch", False):
+        _run_planner()
         return 0
 
-    # No flags: open the board. If there's no plan yet, generate one first.
+    # Read-only view: never create or modify a plan.
     if not schedule.has_plan():
-        info("No schedule yet — generating one. (Use `attend crunch --replan` to "
-             "regenerate later.)")
-        schedule.commit(schedule.generate())
+        info(
+            "No plan yet — showing deadlines only. "
+            "Run `attend schedule --crunch` to plan tasks."
+        )
     _open_board()
     return 0
 
 
-def _crunch_move(args) -> int:
+def cmd_crunch(args) -> int:
+    """Deprecated entry point; delegates to ``cmd_schedule`` equivalents."""
+    if getattr(args, "crunch_command", None) == "move":
+        _deprecation_warn(
+            "`attend crunch move` is deprecated. Use `attend schedule move` instead."
+        )
+        return _schedule_move(args)
+
+    if getattr(args, "undo", False):
+        _deprecation_warn(
+            "`attend crunch --undo` is deprecated. Use `attend schedule --undo` instead."
+        )
+        args.undo = True
+        return cmd_schedule(args)
+
+    if getattr(args, "replan", False):
+        _deprecation_warn(
+            "`attend crunch --replan` is deprecated. Use `attend schedule --crunch` instead."
+        )
+        args.crunch = True
+        return cmd_schedule(args)
+
+    _deprecation_warn(
+        "`attend crunch` is deprecated. Use `attend schedule --crunch` instead."
+    )
+    args.crunch = True
+    return cmd_schedule(args)
+
+
+def _schedule_move(args) -> int:
     task = tasks_store.find(args.task_id)
     if not task:
         error(f"No item with id '{args.task_id}'.")
@@ -384,7 +445,7 @@ def _crunch_move(args) -> int:
         return 1
 
     if not schedule.has_plan():
-        error("No current plan. Run `attend crunch --replan` first.")
+        error("No current plan. Run `attend schedule --crunch` first.")
         return 1
     schedule.move(task["id"], date_iso)  # persists; deliberately not marked stale
     success(f"Moved {task['id']} to {date_iso}.")
@@ -393,8 +454,118 @@ def _crunch_move(args) -> int:
 
 
 # --------------------------------------------------------------------------- #
+# attend fix / attend unfix
+# --------------------------------------------------------------------------- #
+
+
+def cmd_fix(args) -> int:
+    item = tasks_store.find(args.id)
+    if not item:
+        error(f"No item with id '{args.id}'.")
+        return 1
+    if item.get("kind") != "task":
+        error(f"{item['id']} is a {item.get('kind')}; only tasks can be fixed.")
+        return 1
+    if item.get("status") != tasks_store.PENDING:
+        error(f"{item['id']} is {item.get('status')}; only pending tasks can be fixed.")
+        return 1
+
+    id_map = tasks_store.by_id_map()
+    ref = scoring.reference_date(item, id_map)
+    if not ref:
+        error(
+            f"Cannot fix {item['id']}: no linked deadline/event or due date to pin to."
+        )
+        return 1
+
+    # Pin to the task's current plan day when scheduled; otherwise use the
+    # reference date (linked deadline/event or own due).
+    pin = _plan_day_for(item["id"]) or ref[:10]
+    tasks_store.update(item["id"], fixed=True, fixed_date=pin)
+    schedule.mark_stale()
+    success(f"{item['id']} fixed to {pin} (planner will not move it).")
+    return 0
+
+
+def cmd_unfix(args) -> int:
+    item = tasks_store.find(args.id)
+    if not item:
+        error(f"No item with id '{args.id}'.")
+        return 1
+    if not tasks_store.is_fixed(item):
+        error(f"{item['id']} is not fixed.")
+        return 1
+    tasks_store.update(item["id"], fixed=False, fixed_date=None)
+    schedule.mark_stale()
+    success(f"{item['id']} unfixed — planner may reschedule it.")
+    return 0
+
+
+# --------------------------------------------------------------------------- #
 # 7-day Kanban board
 # --------------------------------------------------------------------------- #
+
+
+def _plan_task_ids(plan: dict) -> set[str]:
+    """Task IDs the saved plan already references (scheduled or unschedulable)."""
+    ids: set[str] = set(plan.get("unscheduled", []))
+    for day_ids in plan.get("days", {}).values():
+        ids.update(day_ids)
+    return ids
+
+
+def _new_since_plan(plan: dict) -> list[dict]:
+    """Pending tasks not yet represented anywhere in the saved plan.
+
+    These were added (or re-opened) after the last ``schedule --crunch`` and are
+    shown separately so ``attend schedule`` reflects the full task list without
+    silently re-running the planner.
+    """
+    if not schedule.has_plan():
+        return []
+    known = _plan_task_ids(plan)
+    delta = [
+        t for t in tasks_store.pending(kind="task")
+        if t["id"] not in known
+    ]
+    return tasks_store.sorted_by_score(delta)
+
+
+def _split_new_tasks(
+    new_tasks: list[dict], window_start, id_map: dict[str, dict]
+) -> tuple[dict[str, list[dict]], list[dict], set[str]]:
+    """Split new-since-plan tasks into window column placement vs footer.
+
+    Returns ``(by_day, undated, column_new_ids)`` where ``by_day`` maps ISO dates
+    within the 7-day window to tasks shown visually (not in the saved plan).
+    """
+    window_end = window_start + timedelta(days=6)
+    by_day: dict[str, list[dict]] = {}
+    undated: list[dict] = []
+    column_ids: set[str] = set()
+    for t in new_tasks:
+        ref = scoring.reference_date(t, id_map)
+        if not ref:
+            undated.append(t)
+            continue
+        ref_d = parse_iso(ref[:10])
+        if window_start <= ref_d <= window_end:
+            iso = to_iso(ref_d)
+            by_day.setdefault(iso, []).append(t)
+            column_ids.add(t["id"])
+    return by_day, tasks_store.sorted_by_score(undated), column_ids
+
+
+def _render_task_line(it: dict, *, suffix: str = "") -> None:
+    """One-line task summary for board footer sections."""
+    id_map = tasks_store.by_id_map()
+    ref = scoring.reference_date(it, id_map) or "—"
+    label = config.alias_for(it["subject"]) if it.get("subject") else it["title"]
+    fixed = " 📌" if tasks_store.is_fixed(it) else ""
+    console.print(
+        f"  [cyan]{it['id']}[/cyan]{fixed} {label} "
+        f"[dim]({it['title']}, ref {ref}){suffix}[/dim]"
+    )
 
 
 def _overdue_pending() -> list[dict]:
@@ -436,13 +607,22 @@ def _day_load(items: list[dict], mode: str) -> int:
     return sum(int(it.get("priority", 1)) for it in items)
 
 
-def _build_board(plan: dict, window_start, overdue: list[dict]):
+def _build_board(
+    plan: dict,
+    window_start,
+    overdue: list[dict],
+    *,
+    new_by_day: dict[str, list[dict]] | None = None,
+    new_column_ids: set[str] | None = None,
+):
     id_map = tasks_store.by_id_map()
     base = today()
     s = config.settings()
     mode = s["crunch_capacity_mode"]
     capacity = int(s["crunch_daily_capacity"])
     overloaded_isos: list[str] = []
+    new_by_day = new_by_day or {}
+    new_column_ids = new_column_ids or set()
 
     table = Table(show_lines=True, header_style="bold", expand=False)
 
@@ -476,6 +656,10 @@ def _build_board(plan: dict, window_start, overdue: list[dict]):
             and id_map[i].get("status") == tasks_store.PENDING
             and id_map[i].get("kind") == "task"
         ])
+        # Visual-only: new tasks whose reference date falls on this column.
+        extras = new_by_day.get(iso, [])
+        if extras:
+            day_items = tasks_store.sorted_by_score(day_items + extras)
         day_markers = [
             m for m in markers
             if (ref := scoring.reference_date(m, id_map)) and ref[:10] == iso
@@ -484,7 +668,9 @@ def _build_board(plan: dict, window_start, overdue: list[dict]):
         head = f"{weekday_short(d)}\n{d.strftime('%b %d')}"
         if is_today:
             head = f"[bold green]TODAY[/bold green]\n[green]{d.strftime('%b %d')}[/green]"
-        load = _day_load(day_items, mode)
+        load = _day_load(
+            [it for it in day_items if it["id"] not in new_column_ids], mode
+        )
         if load > capacity:
             overloaded_isos.append(iso)
             head += f"\n[red]⚠ {load}/{capacity}[/red]"
@@ -498,13 +684,19 @@ def _build_board(plan: dict, window_start, overdue: list[dict]):
             return "[dim]—[/dim]"
         lines = []
         for it in items:
+            is_new = it["id"] in new_column_ids
+            new_mark = " [yellow][!][/yellow]" if is_new else ""
             if it.get("subject"):
                 head = config.alias_for(it["subject"])
+                fixed = " [magenta]📌[/magenta]" if tasks_store.is_fixed(it) else ""
                 sub = f"p{it['priority']} · {it['title'][:18]}"
             else:
                 head = it["title"][:20]
+                fixed = " [magenta]📌[/magenta]" if tasks_store.is_fixed(it) else ""
                 sub = f"p{it['priority']}"
-            lines.append(f"[cyan]{it['id']}[/cyan] {head}\n  [dim]{sub}[/dim]")
+            lines.append(
+                f"[cyan]{it['id']}[/cyan]{new_mark}{fixed} {head}\n  [dim]{sub}[/dim]"
+            )
         return "\n".join(lines)
 
     table.add_row(*[cell(items) for _, items, _ in columns])
@@ -550,18 +742,37 @@ def _render_board(window_start) -> None:
     overdue_ids = {i["id"] for i in overdue}
     id_map = tasks_store.by_id_map()
 
-    console.rule("Crunch Board")
-    if schedule.is_stale():
-        console.print(
-            "[bold yellow]⚠ Schedule is stale — run 'attend crunch --replan' "
+    console.rule("Schedule Board")
+    stale = schedule.is_stale()
+    new_tasks = _new_since_plan(plan)
+    new_by_day, _, new_column_ids = _split_new_tasks(
+        new_tasks, window_start, id_map
+    )
+    if stale:
+        msg = (
+            "[bold yellow]⚠ Schedule is stale — run 'attend schedule --crunch' "
             "to regenerate.[/bold yellow]"
+        )
+        if new_tasks:
+            msg += (
+                " [dim]New tasks appear with [!] in columns until you "
+                "replan.[/dim]"
+            )
+        console.print(msg)
+    if not schedule.has_plan():
+        console.print(
+            "[dim]read-only preview (no plan — run `attend schedule --crunch` to plan "
+            "tasks)[/dim]"
         )
     console.print(
         f"[dim]window: {to_iso(window_start)} → "
         f"{to_iso(window_start + timedelta(days=6))}[/dim]"
     )
 
-    board, overloaded_isos = _build_board(plan, window_start, overdue)
+    board, overloaded_isos = _build_board(
+        plan, window_start, overdue,
+        new_by_day=new_by_day, new_column_ids=new_column_ids,
+    )
     console.print(board)
 
     _render_overload(plan, overloaded_isos)
@@ -572,13 +783,18 @@ def _render_board(window_start) -> None:
         console.print("\n[bold red]⚠ UNSCHEDULABLE (cannot fit before deadline):[/bold red]")
         for i in unsched:
             it = id_map.get(i)
-            if it:
-                ref = scoring.reference_date(it, id_map) or "—"
-                label = config.alias_for(it["subject"]) if it.get("subject") else it["title"]
-                console.print(
-                    f"  [cyan]{it['id']}[/cyan] {label} "
-                    f"[dim]({it['title']}, due {ref})[/dim]"
-                )
+            if it and it.get("status") == tasks_store.PENDING:
+                _render_task_line(it)
+
+    if new_tasks:
+        console.print(
+            "\n[bold cyan]UNSCHEDULED (NEW)[/bold cyan] "
+            "[dim]— added since last plan; run `attend schedule --crunch` to place[/dim]"
+        )
+        for it in new_tasks:
+            ref = scoring.reference_date(it, id_map)
+            suffix = " (no date)" if not ref else ""
+            _render_task_line(it, suffix=suffix)
 
     if _pending_markers():
         console.print(
@@ -587,7 +803,8 @@ def _render_board(window_start) -> None:
         )
     console.print(
         "\n[dim]→/l next 7 days · ←/h prev 7 days · q quit · "
-        "move with `attend crunch move ID DATE`[/dim]"
+        "move with `attend schedule move ID DATE` · "
+        "pin with `attend fix ID`[/dim]"
     )
 
 

@@ -68,7 +68,30 @@ def build_parser() -> argparse.ArgumentParser:
     p_show = sub.add_parser("show", help="Show full item detail")
     p_show.add_argument("id")
 
-    p_crunch = sub.add_parser("crunch", help="7-day schedule board (no flags opens board)")
+    p_fix = sub.add_parser("fix", help="Pin a task to its date (planner will not move it)")
+    p_fix.add_argument("id")
+
+    p_unfix = sub.add_parser("unfix", help="Unpin a fixed task so the planner may reschedule it")
+    p_unfix.add_argument("id")
+
+    p_schedule = sub.add_parser(
+        "schedule",
+        help="7-day schedule board (read-only; use --crunch to plan tasks)",
+    )
+    p_schedule.add_argument(
+        "--crunch", action="store_true",
+        help="Run the planner and update the schedule plan",
+    )
+    p_schedule.add_argument("--undo", action="store_true", help="Revert to previous plan")
+    schedule_sub = p_schedule.add_subparsers(dest="schedule_command")
+    p_smove = schedule_sub.add_parser("move", help="Reschedule a task to a date")
+    p_smove.add_argument("task_id")
+    p_smove.add_argument("date")
+
+    p_crunch = sub.add_parser(
+        "crunch",
+        help="[deprecated] Use `attend schedule` instead",
+    )
     p_crunch.add_argument("--undo", action="store_true", help="Revert to previous plan")
     p_crunch.add_argument("--replan", action="store_true",
                           help="Regenerate the full schedule from scratch")
@@ -175,7 +198,7 @@ def _dispatch(args: argparse.Namespace) -> int:
         from .commands import bunks
         return bunks.dispatch(cmd, args)
 
-    if cmd in {"add", "tasks", "done", "cancel", "show", "crunch"}:
+    if cmd in {"add", "tasks", "done", "cancel", "show", "schedule", "crunch", "fix", "unfix"}:
         from .commands import tasks_cmd
         return tasks_cmd.dispatch(cmd, args)
 

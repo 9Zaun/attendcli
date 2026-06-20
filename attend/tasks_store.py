@@ -95,6 +95,26 @@ def sorted_by_score(
     )
 
 
+def is_fixed(item: dict) -> bool:
+    """True when a task is pinned and must not be moved by the planner."""
+    return bool(item.get("fixed"))
+
+
+def pin_date(item: dict, id_map: dict[str, dict] | None = None) -> str | None:
+    """Return the ISO date a fixed task is pinned to, or None.
+
+    Uses the stored ``fixed_date`` when set; otherwise falls back to the task's
+    reference date (linked deadline/event or own ``due``) for legacy rows that
+    only have ``fixed=true``.
+    """
+    if not is_fixed(item):
+        return None
+    if item.get("fixed_date"):
+        return item["fixed_date"]
+    ref = scoring.reference_date(item, id_map or by_id_map())
+    return ref[:10] if ref else None
+
+
 def upcoming(days: int = 7, ref_today: date | None = None) -> list[dict[str, Any]]:
     """Pending items whose reference date falls within the next ``days`` days."""
     base = ref_today or today()
